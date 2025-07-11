@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Safe Token Transfer</title>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.8.1/dist/ethers.umd.min.js"></script>
+  <script type="module">
+    import Safe, { EthersAdapter } from "https://cdn.skypack.dev/@safe-global/protocol-kit";
+    import { SafeFactory } from "https://cdn.skypack.dev/@safe-global/protocol-kit";
+    window.SafeProtocolKit = { Safe, EthersAdapter, SafeFactory };
+  </script>
   <style>
     #modal {
       position: fixed;
@@ -28,9 +33,12 @@
   <label>Token Address: <input id="tokenAddress" type="text" placeholder="0x..." size="42"></label><br>
   <label>Recipient Address: <input id="destination" type="text" placeholder="0x..." size="42"></label><br>
   <label>Amount: <input id="amount" type="text" placeholder="Amount"></label><br><br>
-  <button id="approveBtn">Approve Transfer</button>
-  <button id="executeBtn" disabled>Execute Transfer</button>
+  <button id="loadQueueBtn">Load Pending Transaction</button>
+  <button id="executePendingBtn" disabled>Execute Pending</button>
+  <button id="approveBtn">Approve New Transfer</button>
+  <button id="executeBtn" disabled>Execute New Transfer</button>
   <button id="previewBtn">Preview Transaction</button>
+  <p id="nonceInfo"></p>
   <p id="status"></p>
 
   <div id="modal">
@@ -41,12 +49,9 @@
     </div>
   </div>
 
-  <script>
-    const SAFE_ABI = [
-      "function getTransactionHash(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, uint256 _nonce) public view returns (bytes32)",
-      "function nonce() view returns (uint256)",
-      "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) returns (bool)"
-    ];
+  <script type="module">
+    import Safe, { EthersAdapter } from "https://cdn.skypack.dev/@safe-global/protocol-kit";
+    import { ethers } from "https://cdn.skypack.dev/ethers@6.8.1";
 
     const ERC20_ABI = [
       "function transfer(address to, uint256 value) returns (bool)",
@@ -54,6 +59,7 @@
     ];
 
     let prepared = {};
+    let pending = {};
 
     async function approveTransfer() {
       const status = document.getElementById("status");
@@ -76,39 +82,24 @@
         await window.ethereum.request({ method: "eth_requestAccounts" });
         const provider = new ethers.BrowserProvider(window.ethereum);
         const signer = await provider.getSigner();
-        const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+        const ethAdapter = new EthersAdapter({ ethers, signerOrProvider: signer });
+
+        const safeSdk = await Safe.create({ ethAdapter, safeAddress: safeAddr });
+
+        const token = new ethers.Contract(tokenAddr, ERC20_ABI, signer);
         const decimals = await token.decimals();
         const amountRaw = ethers.parseUnits(amount, decimals);
-        const transferCalldata = token.interface.encodeFunctionData("transfer", [destination, amountRaw]);
+        const data = token.interface.encodeFunctionData("transfer", [destination, amountRaw]);
 
-        const safe = new ethers.Contract(safeAddr, SAFE_ABI, signer);
-        const nonce = await safe.nonce();
-
-        // Estimate safeTxGas using callStatic
-        const gasEstimate = await safe.connect(signer).estimateGas.execTransaction(
-          tokenAddr, 0, transferCalldata, 0,
-          0, 0, 0, ethers.ZeroAddress, ethers.ZeroAddress, "0x"
-        );
-
-        const safeTxGas = gasEstimate;
-        const baseGas = 0;
-        const gasPrice = 0;
-
-        const txHash = await safe.getTransactionHash(
-          tokenAddr, 0, transferCalldata, 0,
-          safeTxGas, baseGas, gasPrice,
-          ethers.ZeroAddress, ethers.ZeroAddress,
-          nonce
-        );
-
-        const flatSig = await signer.signMessage(ethers.getBytes(txHash));
-        const sig = flatSig + "01".replace("0x", "");
-
-        prepared = {
-          safe, tokenAddr, transferCalldata, sig,
-          destination, amount, decimals,
-          safeTxGas, baseGas, gasPrice
+        const safeTransactionData = {
+          to: tokenAddr,
+          data,
+          value: "0"
         };
+
+        const safeTx = await safeSdk.createTransaction({ safeTransactionData });
+        prepared = { safeSdk, safeTx };
+
         document.getElementById("executeBtn").disabled = false;
         status.textContent = `Transaction approved. Ready to execute.`;
       } catch (err) {
@@ -119,28 +110,62 @@
 
     async function executeTransfer() {
       const status = document.getElementById("status");
-      if (!prepared.safe) {
+      if (!prepared.safeSdk || !prepared.safeTx) {
         status.textContent = "Transaction not approved.";
         return;
       }
 
       try {
-        const tx = await prepared.safe.execTransaction(
-          prepared.tokenAddr,
-          0,
-          prepared.transferCalldata,
-          0,
-          prepared.safeTxGas,
-          prepared.baseGas,
-          prepared.gasPrice,
-          ethers.ZeroAddress,
-          ethers.ZeroAddress,
-          prepared.sig
-        );
+        const tx = await prepared.safeSdk.executeTransaction(prepared.safeTx);
         status.textContent = `Transaction executed: ${tx.hash}`;
       } catch (err) {
         console.error(err);
         status.textContent = `Execution error: ${err.message}`;
+      }
+    }
+
+    async function loadPendingTransaction() {
+      const status = document.getElementById("status");
+      const nonceInfo = document.getElementById("nonceInfo");
+      const safeAddr = document.getElementById("safeAddress").value.trim();
+
+      try {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const ethAdapter = new EthersAdapter({ ethers, signerOrProvider: signer });
+        const safeSdk = await Safe.create({ ethAdapter, safeAddress: safeAddr });
+
+        const nonce = await safeSdk.getNonce();
+        nonceInfo.textContent = `Current Safe nonce (blocking further txs): ${nonce}`;
+
+        const dummyTx = await safeSdk.createTransaction({
+          safeTransactionData: {
+            to: safeAddr,
+            value: "0",
+            data: "0x"
+          },
+          options: { nonce }
+        });
+        const txHash = await safeSdk.getTransactionHash(dummyTx);
+
+        pending = { safeSdk, txHash };
+        document.getElementById("executePendingBtn").disabled = false;
+        status.textContent = `Pending tx hash loaded for nonce ${nonce}. Ready to try execution.`;
+      } catch (err) {
+        console.error(err);
+        status.textContent = `Load error: ${err.message}`;
+      }
+    }
+
+    async function executePending() {
+      const status = document.getElementById("status");
+      try {
+        const tx = await pending.safeSdk.executeTransactionByHash(pending.txHash);
+        status.textContent = `Pending transaction executed: ${tx.hash}`;
+      } catch (err) {
+        console.error(err);
+        status.textContent = `Pending execution failed: ${err.message}`;
       }
     }
 
@@ -158,6 +183,8 @@
     document.getElementById("approveBtn").addEventListener("click", approveTransfer);
     document.getElementById("executeBtn").addEventListener("click", executeTransfer);
     document.getElementById("previewBtn").addEventListener("click", previewTransaction);
+    document.getElementById("loadQueueBtn").addEventListener("click", loadPendingTransaction);
+    document.getElementById("executePendingBtn").addEventListener("click", executePending);
   </script>
 </body>
 </html>
