@@ -7,16 +7,19 @@
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.8.1/dist/ethers.umd.min.js"></script>
 </head>
 <body>
-  <h1>Transfer ERC-20 from Gnosis Safe</h1>
+  <h1>Propose ERC-20 Transfer from Gnosis Safe</h1>
   <label>Safe Address: <input id="safeAddress" type="text" placeholder="0x..." size="42"></label><br>
   <label>Token Address: <input id="tokenAddress" type="text" placeholder="0x..." size="42"></label><br>
   <label>Recipient Address: <input id="destination" type="text" placeholder="0x..." size="42"></label><br>
   <label>Amount: <input id="amount" type="text" placeholder="Amount"></label><br><br>
-  <button id="transferBtn">Send Token</button>
+  <button id="approveBtn">Approve Transfer</button>
+  <button id="executeBtn" disabled>Execute Transfer</button>
   <p id="status"></p>
 
   <script>
     const SAFE_ABI = [
+      "function getTransactionHash(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, uint256 _nonce) public view returns (bytes32)",
+      "function nonce() view returns (uint256)",
       "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) returns (bool)"
     ];
 
@@ -25,7 +28,9 @@
       "function decimals() view returns (uint8)"
     ];
 
-    async function transferTokensFromSafe() {
+    let prepared = {};
+
+    async function approveTransfer() {
       const status = document.getElementById("status");
       const safeAddr = document.getElementById("safeAddress").value.trim();
       const tokenAddr = document.getElementById("tokenAddress").value.trim();
@@ -46,35 +51,60 @@
         await window.ethereum.request({ method: "eth_requestAccounts" });
         const provider = new ethers.BrowserProvider(window.ethereum);
         const signer = await provider.getSigner();
-
-        status.textContent = "Connected. Building transaction...";
-
         const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
         const decimals = await token.decimals();
         const amountRaw = ethers.parseUnits(amount, decimals);
         const transferCalldata = token.interface.encodeFunctionData("transfer", [destination, amountRaw]);
 
         const safe = new ethers.Contract(safeAddr, SAFE_ABI, signer);
+        const nonce = await safe.nonce();
 
-        const tx = await safe.execTransaction(
-          tokenAddr,             // to: the token contract
-          0,                     // value: no ETH sent
-          transferCalldata,      // data: encoded token transfer
-          0,                     // operation: CALL (0)
-          0, 0, 0,               // safeTxGas, baseGas, gasPrice
-          ethers.ZeroAddress,   // gasToken
-          ethers.ZeroAddress,   // refundReceiver
-          "0x"                   // signatures placeholder
+        const txHash = await safe.getTransactionHash(
+          tokenAddr, 0, transferCalldata, 0,
+          0, 0, 0,
+          ethers.ZeroAddress, ethers.ZeroAddress,
+          nonce
         );
 
-        status.textContent = `Transaction submitted: ${tx.hash}`;
+        const flatSig = await signer.signMessage(ethers.getBytes(txHash));
+        const sig = flatSig + "01".replace("0x", "");
+
+        prepared = { safe, tokenAddr, transferCalldata, sig };
+        document.getElementById("executeBtn").disabled = false;
+        status.textContent = `Transaction approved. Ready to execute.`;
       } catch (err) {
         console.error(err);
-        status.textContent = `Error: ${err.message}`;
+        status.textContent = `Approval error: ${err.message}`;
       }
     }
 
-    document.getElementById("transferBtn").addEventListener("click", transferTokensFromSafe);
+    async function executeTransfer() {
+      const status = document.getElementById("status");
+      if (!prepared.safe) {
+        status.textContent = "Transaction not approved.";
+        return;
+      }
+
+      try {
+        const tx = await prepared.safe.execTransaction(
+          prepared.tokenAddr,
+          0,
+          prepared.transferCalldata,
+          0,
+          0, 0, 0,
+          ethers.ZeroAddress,
+          ethers.ZeroAddress,
+          prepared.sig
+        );
+        status.textContent = `Transaction executed: ${tx.hash}`;
+      } catch (err) {
+        console.error(err);
+        status.textContent = `Execution error: ${err.message}`;
+      }
+    }
+
+    document.getElementById("approveBtn").addEventListener("click", approveTransfer);
+    document.getElementById("executeBtn").addEventListener("click", executeTransfer);
   </script>
 </body>
 </html>
