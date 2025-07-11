@@ -84,9 +84,19 @@
         const safe = new ethers.Contract(safeAddr, SAFE_ABI, signer);
         const nonce = await safe.nonce();
 
+        // Estimate safeTxGas using callStatic
+        const gasEstimate = await safe.connect(signer).estimateGas.execTransaction(
+          tokenAddr, 0, transferCalldata, 0,
+          0, 0, 0, ethers.ZeroAddress, ethers.ZeroAddress, "0x"
+        );
+
+        const safeTxGas = gasEstimate;
+        const baseGas = 0;
+        const gasPrice = 0;
+
         const txHash = await safe.getTransactionHash(
           tokenAddr, 0, transferCalldata, 0,
-          0, 0, 0,
+          safeTxGas, baseGas, gasPrice,
           ethers.ZeroAddress, ethers.ZeroAddress,
           nonce
         );
@@ -94,7 +104,11 @@
         const flatSig = await signer.signMessage(ethers.getBytes(txHash));
         const sig = flatSig + "01".replace("0x", "");
 
-        prepared = { safe, tokenAddr, transferCalldata, sig, destination, amount, decimals };
+        prepared = {
+          safe, tokenAddr, transferCalldata, sig,
+          destination, amount, decimals,
+          safeTxGas, baseGas, gasPrice
+        };
         document.getElementById("executeBtn").disabled = false;
         status.textContent = `Transaction approved. Ready to execute.`;
       } catch (err) {
@@ -116,7 +130,9 @@
           0,
           prepared.transferCalldata,
           0,
-          0, 0, 0,
+          prepared.safeTxGas,
+          prepared.baseGas,
+          prepared.gasPrice,
           ethers.ZeroAddress,
           ethers.ZeroAddress,
           prepared.sig
