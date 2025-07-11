@@ -5,6 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Safe Token Transfer</title>
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.8.1/dist/ethers.umd.min.js"></script>
+  <style>
+    #modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: rgba(0, 0, 0, 0.6);
+      display: none;
+      justify-content: center;
+      align-items: center;
+    }
+    #modalContent {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      width: 400px;
+    }
+  </style>
 </head>
 <body>
   <h1>Propose ERC-20 Transfer from Gnosis Safe</h1>
@@ -14,7 +30,16 @@
   <label>Amount: <input id="amount" type="text" placeholder="Amount"></label><br><br>
   <button id="approveBtn">Approve Transfer</button>
   <button id="executeBtn" disabled>Execute Transfer</button>
+  <button id="previewBtn">Preview Transaction</button>
   <p id="status"></p>
+
+  <div id="modal">
+    <div id="modalContent">
+      <h3>Transaction Preview</h3>
+      <p id="previewText"></p>
+      <button onclick="document.getElementById('modal').style.display='none'">Close</button>
+    </div>
+  </div>
 
   <script>
     const SAFE_ABI = [
@@ -69,7 +94,7 @@
         const flatSig = await signer.signMessage(ethers.getBytes(txHash));
         const sig = flatSig + "01".replace("0x", "");
 
-        prepared = { safe, tokenAddr, transferCalldata, sig };
+        prepared = { safe, tokenAddr, transferCalldata, sig, destination, amount, decimals };
         document.getElementById("executeBtn").disabled = false;
         status.textContent = `Transaction approved. Ready to execute.`;
       } catch (err) {
@@ -103,8 +128,20 @@
       }
     }
 
+    function previewTransaction() {
+      const previewText = document.getElementById("previewText");
+      const destination = document.getElementById("destination").value;
+      const amount = document.getElementById("amount").value;
+      const token = document.getElementById("tokenAddress").value;
+      const safe = document.getElementById("safeAddress").value;
+
+      previewText.textContent = `Sending ${amount} tokens from Safe ${safe} to ${destination} via token ${token}`;
+      document.getElementById("modal").style.display = "flex";
+    }
+
     document.getElementById("approveBtn").addEventListener("click", approveTransfer);
     document.getElementById("executeBtn").addEventListener("click", executeTransfer);
+    document.getElementById("previewBtn").addEventListener("click", previewTransaction);
   </script>
 </body>
 </html>
