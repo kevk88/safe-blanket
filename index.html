@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Safe Token Transfer</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.8.1/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+  <h1>Transfer ERC-20 from Gnosis Safe</h1>
+  <label>Safe Address: <input id="safeAddress" type="text" placeholder="0x..." size="42"></label><br>
+  <label>Token Address: <input id="tokenAddress" type="text" placeholder="0x..." size="42"></label><br>
+  <label>Recipient Address: <input id="destination" type="text" placeholder="0x..." size="42"></label><br>
+  <label>Amount: <input id="amount" type="text" placeholder="Amount"></label><br><br>
+  <button id="transferBtn">Send Token</button>
+  <p id="status"></p>
+
+  <script>
+    const SAFE_ABI = [
+      "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) returns (bool)"
+    ];
+
+    const ERC20_ABI = [
+      "function transfer(address to, uint256 value) returns (bool)",
+      "function decimals() view returns (uint8)"
+    ];
+
+    async function transferTokensFromSafe() {
+      const status = document.getElementById("status");
+      const safeAddr = document.getElementById("safeAddress").value.trim();
+      const tokenAddr = document.getElementById("tokenAddress").value.trim();
+      const destination = document.getElementById("destination").value.trim();
+      const amount = document.getElementById("amount").value.trim();
+
+      if (!ethers.isAddress(safeAddr) || !ethers.isAddress(tokenAddr) || !ethers.isAddress(destination) || !amount) {
+        status.textContent = "Invalid input. Please check all fields.";
+        return;
+      }
+
+      if (!window.ethereum) {
+        status.textContent = "MetaMask not detected.";
+        return;
+      }
+
+      try {
+        await window.ethereum.request({ method: "eth_requestAccounts" });
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+
+        status.textContent = "Connected. Building transaction...";
+
+        const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+        const decimals = await token.decimals();
+        const amountRaw = ethers.parseUnits(amount, decimals);
+        const transferCalldata = token.interface.encodeFunctionData("transfer", [destination, amountRaw]);
+
+        const safe = new ethers.Contract(safeAddr, SAFE_ABI, signer);
+
+        const tx = await safe.execTransaction(
+          tokenAddr,             // to: the token contract
+          0,                     // value: no ETH sent
+          transferCalldata,      // data: encoded token transfer
+          0,                     // operation: CALL (0)
+          0, 0, 0,               // safeTxGas, baseGas, gasPrice
+          ethers.ZeroAddress,   // gasToken
+          ethers.ZeroAddress,   // refundReceiver
+          "0x"                   // signatures placeholder
+        );
+
+        status.textContent = `Transaction submitted: ${tx.hash}`;
+      } catch (err) {
+        console.error(err);
+        status.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    document.getElementById("transferBtn").addEventListener("click", transferTokensFromSafe);
+  </script>
+</body>
+</html>
